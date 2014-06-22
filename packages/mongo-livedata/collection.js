@@ -426,8 +426,9 @@ _.each(["insert", "update", "remove"], function (name) {
         }
         if (generateId) {
           insertId = args[0]._id = self._makeNewID();
-        Mylar_meta['doc'] = args[0];
+          Mylar_meta['doc'] = args[0];
         }
+      }
   } else {
 	  args[0] = Meteor.Collection._rewriteSelector(args[0]);
 	  
