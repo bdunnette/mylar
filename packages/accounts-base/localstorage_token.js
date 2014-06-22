@@ -122,7 +122,7 @@ var pollStoredLoginToken = function() {
       });
     } else {
       Meteor.logout();
-    }
+  }
   }
   lastLoginTokenWhenPolled = currentLoginToken;
 };

@@ -67,6 +67,7 @@ Accounts.config = function(options) {
 
   // validate option keys
   var VALID_KEYS = ["sendVerificationEmail", "forbidClientAccountCreation",
+		    "restrictClientAccountCreation",
                     "restrictCreationByEmailDomain", "loginExpirationInDays"];
   _.each(_.keys(options), function (key) {
     if (!_.contains(VALID_KEYS, key)) {
@@ -130,8 +131,8 @@ Meteor.users = new Meteor.Collection("users", {
 Meteor.startup(function () {
   var ServiceConfiguration =
     Package['service-configuration'].ServiceConfiguration;
-  Accounts.loginServiceConfiguration = ServiceConfiguration.configurations;
-  Accounts.ConfigError = ServiceConfiguration.ConfigError;
+Accounts.loginServiceConfiguration = ServiceConfiguration.configurations;
+Accounts.ConfigError = ServiceConfiguration.ConfigError;
 });
 
 // Thrown when the user cancels the login process (eg, closes an oauth
