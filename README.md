@@ -8,9 +8,25 @@ http://docs.meteor.com/
 ## Building
 You'll need the following libraries to build Mylar:
 
-- libreadline
+
 - libgmp
+wget https://gmplib.org/download/gmp/gmp-6.0.0a.tar.xz
+tar xvfJ gmp-6.0.0a.tar.xz
+cd gmp-6.0.0
+./configure
+make
+make check
+sudo make install
+
+- libreadline
+brew install readline
+
 - libpbc
+brew install pbc
+
+- libntl
+brew install ntl
+
 - libcrypto++9
 
 ## Demo
