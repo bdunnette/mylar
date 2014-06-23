@@ -8,80 +8,47 @@
 // @param password {String}
 // @param callback {Function(error|undefined)}
 Meteor.loginWithPassword = function (selector, password, callback) {
-  if (typeof selector === 'string')
+  var srp = new SRP.Client(password);
+  var request = srp.startExchange();
+
+    if (typeof selector === 'string') {
     if (selector.indexOf('@') === -1)
       selector = {username: selector};
     else
       selector = {email: selector};
-
-  Accounts.callLoginMethod({
-    methodArguments: [{
-      user: selector,
-      password: hashPassword(password)
-    }],
-    userCallback: function (error, result) {
-      if (error && error.error === 400 &&
-          error.reason === 'old password format') {
-        // The "reason" string should match the error thrown in the
-        // password login handler in password_server.js.
-
-        // XXX COMPAT WITH 0.8.1.3
-        // If this user's last login was with a previous version of
-        // Meteor that used SRP, then the server throws this error to
-        // indicate that we should try again. The error includes the
-        // user's SRP identity. We provide a value derived from the
-        // identity and the password to prove to the server that we know
-        // the password without requiring a full SRP flow, as well as
-        // SHA256(password), which the server bcrypts and stores in
-        // place of the old SRP information for this user.
-        srpUpgradePath({
-          upgradeError: error,
-          userSelector: selector,
-          plaintextPassword: password
-        }, callback);
-      }
-      else if (error) {
-        callback(error);
-      } else {
-        callback();
-      }
     }
-  });
-};
+    else {
+	if (!selector['username'] && !selector['email']) {
+	    throw new Error("cannot login user without some username or email");
+	}
+    }
 
-var hashPassword = function (password) {
-  return {
-    digest: SHA256(password),
-    algorithm: "sha-256"
-  };
-};
+  request.user = selector;
 
-// XXX COMPAT WITH 0.8.1.3
-// The server requested an upgrade from the old SRP password format,
-// so supply the needed SRP identity to login. Options:
-//   - upgradeError: the error object that the server returned to tell
-//     us to upgrade from SRP to bcrypt.
-//   - userSelector: selector to retrieve the user object
-//   - plaintextPassword: the password as a string
-var srpUpgradePath = function (options, callback) {
-  var details;
-  try {
-    details = EJSON.parse(options.upgradeError.details);
-  } catch (e) {}
-  if (!(details && details.format === 'srp')) {
-    callback(new Meteor.Error(400,
-                              "Password is old. Please reset your " +
-                              "password."));
-  } else {
+  // Normally, we only set Meteor.loggingIn() to true within
+  // Accounts.callLoginMethod, but we'd also like it to be true during the
+  // password exchange. So we set it to true here, and clear it on error; in
+  // the non-error case, it gets cleared by callLoginMethod.
+  Accounts._setLoggingIn(true);
+  Accounts.connection.apply(
+    'beginPasswordExchange', [request], function (error, result) {
+    if (error || !result) {
+      Accounts._setLoggingIn(false);
+        error = error ||
+          new Error("No result from call to beginPasswordExchange");
+      callback && callback(error);
+      return;
+    }
+
+    var response = srp.respondToChallenge(result);
     Accounts.callLoginMethod({
-      methodArguments: [{
-        user: options.userSelector,
-        srp: SHA256(details.identity + ":" + options.plaintextPassword),
-        password: hashPassword(options.plaintextPassword)
-      }],
-      userCallback: callback
-    });
-  }
+      methodArguments: [{srp: response}],
+      validateResult: function (result) {
+        if (!srp.verifyConfirmation({HAMK: result.HAMK}))
+          throw new Error("Server is cheating!");
+      },
+      userCallback: callback});
+  });
 };
 
 
@@ -91,13 +58,15 @@ Accounts.createUser = function (options, callback) {
 
   if (!options.password)
     throw new Error("Must set options.password");
-
-  // Replace password with the hashed password.
-  options.password = hashPassword(options.password);
+  var verifier = SRP.generateVerifier(options.password);
+  // strip old password, replacing with the verifier object
+  delete options.password;
+  options.srp = verifier;
 
   Accounts.callLoginMethod({
     methodName: 'createUser',
     methodArguments: [options],
+    suppressLogin: options.suppressLogin,
     userCallback: callback
   });
 };
@@ -117,39 +86,49 @@ Accounts.changePassword = function (oldPassword, newPassword, callback) {
     return;
   }
 
-  Accounts.connection.apply(
-    'changePassword',
-    [oldPassword ? hashPassword(oldPassword) : null, hashPassword(newPassword)],
-    function (error, result) {
+  var verifier = SRP.generateVerifier(newPassword);
+
+  if (!oldPassword) {
+    Accounts.connection.apply(
+      'changePassword', [{srp: verifier}], function (error, result) {
       if (error || !result) {
-        if (error && error.error === 400 &&
-            error.reason === 'old password format') {
-          // XXX COMPAT WITH 0.8.1.3
-          // The server is telling us to upgrade from SRP to bcrypt, as
-          // in Meteor.loginWithPassword.
-          srpUpgradePath({
-            upgradeError: error,
-            userSelector: { id: Meteor.userId() },
-            plaintextPassword: oldPassword
-          }, function (err) {
-            if (err) {
-              callback(err);
-            } else {
-              // Now that we've successfully migrated from srp to
-              // bcrypt, try changing the password again.
-              Accounts.changePassword(oldPassword, newPassword, callback);
-            }
-          });
-        } else {
-          // A normal error, not an error telling us to upgrade to bcrypt
-          callback && callback(
-            error || new Error("No result from changePassword."));
-        }
+        callback && callback(
+          error || new Error("No result from changePassword."));
       } else {
         callback && callback();
       }
-    }
-  );
+    });
+  } else { // oldPassword
+    var srp = new SRP.Client(oldPassword);
+    var request = srp.startExchange();
+    request.user = {id: Meteor.user()._id};
+    Accounts.connection.apply(
+      'beginPasswordExchange', [request], function (error, result) {
+      if (error || !result) {
+        callback && callback(
+          error || new Error("No result from call to beginPasswordExchange"));
+        return;
+      }
+
+      var response = srp.respondToChallenge(result);
+      response.srp = verifier;
+        Accounts.connection.apply(
+          'changePassword', [response],function (error, result) {
+        if (error || !result) {
+          callback && callback(
+            error || new Error("No result from changePassword."));
+        } else {
+          if (!srp.verifyConfirmation(result)) {
+            // Monkey business!
+                callback &&
+                  callback(new Error("Old password verification failed."));
+          } else {
+            callback && callback();
+          }
+        }
+      });
+    });
+  }
 };
 
 // Sends an email to a user with a link that can be used to reset
@@ -176,9 +155,10 @@ Accounts.resetPassword = function(token, newPassword, callback) {
   if (!newPassword)
     throw new Error("Need to pass newPassword");
 
+  var verifier = SRP.generateVerifier(newPassword);
   Accounts.callLoginMethod({
     methodName: 'resetPassword',
-    methodArguments: [token, hashPassword(newPassword)],
+    methodArguments: [token, verifier],
     userCallback: callback});
 };
 

@@ -24,10 +24,6 @@ if (Meteor.isServer) {
       Meteor.publish('c-' + name, function () {
         return c.find();
       });
-    },
-    dropInsecureCollection: function(name) {
-      var c = COLLECTIONS[name];
-      c._dropCollection();
     }
   });
 }
@@ -334,6 +330,7 @@ Tinytest.addAsync("mongo-livedata - basics, " + idGeneration, function (test, on
   }, context);
   test.equal(total, 14);
 
+  cur.rewind();
   index = 0;
   test.equal(cur.map(function (doc, i, cursor) {
     // XXX we could theoretically make map run its iterations in parallel or
@@ -1451,27 +1448,20 @@ testAsyncMulti('mongo-livedata - document with a custom type, ' + idGeneration, 
       Meteor.subscribe('c-' + this.collectionName, expect());
     }
   }, function (test, expect) {
-    var self = this;
-    self.coll = new Meteor.Collection(this.collectionName, collectionOptions);
+    var coll = new Meteor.Collection(this.collectionName, collectionOptions);
     var docId;
     // Dog is implemented at the top of the file, outside of the idGeneration
     // loop (so that we only call EJSON.addType once).
     var d = new Dog("reginald", "purple");
-    self.coll.insert({d: d}, expect(function (err, id) {
+    coll.insert({d: d}, expect(function (err, id) {
       test.isFalse(err);
       test.isTrue(id);
       docId = id;
-      var cursor = self.coll.find();
+      var cursor = coll.find();
       test.equal(cursor.count(), 1);
-      var inColl = self.coll.findOne();
+      var inColl = coll.findOne();
       test.isTrue(inColl);
       inColl && test.equal(inColl.d.speak(), "woof");
-    }));
-  }, function (test, expect) {
-    var self = this;
-    self.coll.insert(new Dog("rover", "orange"), expect(function (err, id) {
-      test.isTrue(err);
-      test.isFalse(id);
     }));
   }
 ]);
@@ -2341,21 +2331,14 @@ _.each( ['STRING', 'MONGO'], function (idGeneration) {
   testAsyncMulti('mongo-livedata - consistent _id generation ' + name + ', ' + repetitions + ' repetitions on ' + collectionCount + ' collections, idGeneration=' + idGeneration, [ function (test, expect) {
     var collectionOptions = { idGeneration: idGeneration };
 
-    var cleanups = this.cleanups = [];
     this.collections = _.times(collectionCount, function () {
       var collectionName = "consistentid_" + Random.id();
       if (Meteor.isClient) {
         Meteor.call('createInsecureCollection', collectionName, collectionOptions);
         Meteor.subscribe('c-' + collectionName, expect());
-        cleanups.push(function (expect) { Meteor.call('dropInsecureCollection', collectionName, expect(function () {})); });
       }
 
-      var collection = new Meteor.Collection(collectionName, collectionOptions);
-      if (Meteor.isServer) {
-        cleanups.push(function () { collection._dropCollection(); });
-      }
-      COLLECTIONS[collectionName] = collection;
-      return collection;
+      return (COLLECTIONS[collectionName] = new Meteor.Collection(collectionName, collectionOptions));
     });
   }, function (test, expect) {
     // now run the actual test
@@ -2364,11 +2347,6 @@ _.each( ['STRING', 'MONGO'], function (idGeneration) {
         fn(test, expect, this.collections[j], i);
       }
     }
-  }, function (test, expect) {
-    // Run any registered cleanup functions (e.g. to drop collections)
-    _.each(this.cleanups, function(cleanup) {
-      cleanup(expect);
-    });
   }]);
 
 });
@@ -2976,3 +2954,12 @@ testAsyncMulti("mongo-livedata - undefined find options", [
     test.equal(result, self.doc);
   }
 ]);
+
+// We're not sure if this should be supported, but it was broken in
+// 0.8.1 and we decided to make a quick
+// fix. https://github.com/meteor/meteor/issues/2095
+Meteor.isServer && Tinytest.add("mongo-livedata - insert and retrieve EJSON user-defined type as document", function (test) {
+  var coll = new Meteor.Collection(Random.id());
+  coll.insert(new Meteor.Collection.ObjectID());
+  coll.find({}).fetch();
+});

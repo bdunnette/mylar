@@ -101,8 +101,9 @@ Meteor.Collection = function (name, options) {
 
    if (Meteor.Collection.intercept && Meteor.Collection.intercept.init) {
 	Meteor.Collection.intercept.init(self);
+   } else {
    }
-
+    
   if (self._connection && self._connection.registerStore) {
     // OK, we're going to be a slave, replicating some remote
     // database, except possibly with some temporary divergence while
@@ -414,21 +415,9 @@ _.each(["insert", "update", "remove"], function (name) {
 				 || insertId instanceof Meteor.Collection.ObjectID))
 		  throw new Error("Meteor requires document _id fields to be non-empty strings or ObjectIDs");
 	  } else {
-        var generateId = true;
-        // Don't generate the id if we're the client and the 'outermost' call
-        // This optimization saves us passing both the randomSeed and the id
-        // Passing both is redundant.
-        if (self._connection && self._connection !== Meteor.server) {
-          var enclosing = DDP._CurrentInvocation.get();
-          if (!enclosing) {
-            generateId = false;
-          }
-        }
-        if (generateId) {
-          insertId = args[0]._id = self._makeNewID();
-          Mylar_meta['doc'] = args[0];
-        }
-      }
+        insertId = args[0]._id = self._makeNewID();
+        Mylar_meta['doc'] = args[0];
+    }
   } else {
 	  args[0] = Meteor.Collection._rewriteSelector(args[0]);
 	  
@@ -527,12 +516,15 @@ _.each(["insert", "update", "remove"], function (name) {
 	  } catch (e) {
 	      if (callback) {
 		  callback(e);
-          return null;
+		  ret = null;
+		  return;
 	      }
 	      throw e;
 	  }
       }
-
+      
+      
+      
       // both sync and async, unless we threw an exception, return ret
       // (new document ID for insert, num affected for update/remove, object with
       // numberAffected and maybe insertedId for upsert).

@@ -181,7 +181,7 @@ var Connection = function (url, options) {
 
   // Reactive userId.
   self._userId = null;
-  self._userIdDeps = new Deps.Dependency;
+  self._userIdDeps = (typeof Deps !== "undefined") && new Deps.Dependency;
 
   // Block auto-reload while we're waiting for method responses.
   if (Meteor.isClient && Package.reload && !options.reloadWithOutstanding) {
@@ -210,7 +210,7 @@ var Connection = function (url, options) {
       // compat.  Remove this 'if' once the server stops sending welcome
       // messages (stream_server.js).
       if (! (msg && msg.server_id))
-        Meteor._debug("discarding invalid livedata message", msg);
+      Meteor._debug("discarding invalid livedata message", msg);
       return;
     }
 
@@ -522,18 +522,9 @@ _.extend(Connection.prototype, {
         params: EJSON.clone(params),
         inactive: false,
         ready: false,
-        readyDeps: new Deps.Dependency,
+        readyDeps: (typeof Deps !== "undefined") && new Deps.Dependency,
         readyCallback: callbacks.onReady,
-        errorCallback: callbacks.onError,
-        connection: self,
-        remove: function() {
-          delete this.connection._subscriptions[this.id];
-          this.ready && this.readyDeps.changed();
-        },
-        stop: function() {
-          this.connection._send({msg: 'unsub', id: id});
-          this.remove();
-        }
+        errorCallback: callbacks.onError
       };
       self._send({msg: 'sub', id: id, name: name, params: params});
     }
@@ -543,15 +534,15 @@ _.extend(Connection.prototype, {
       stop: function () {
         if (!_.has(self._subscriptions, id))
           return;
-        
-        self._subscriptions[id].stop();
+        self._send({msg: 'unsub', id: id});
+        delete self._subscriptions[id];
       },
       ready: function () {
         // return false if we've unsubscribed.
         if (!_.has(self._subscriptions, id))
           return false;
         var record = self._subscriptions[id];
-        record.readyDeps.depend();
+        record.readyDeps && record.readyDeps.depend();
         return record.ready;
       }
     };
@@ -643,7 +634,7 @@ _.extend(Connection.prototype, {
   //                              be confused with server return values; we
   //                              may improve this in future.
   // @param callback {Optional Function}
-  apply: function (name, args, options, callback) {
+    apply: function (name, args, options, callback, meta) {
     var self = this;
 
     // We were passed 3 arguments. They may be either (name, args, options)
@@ -657,16 +648,12 @@ _.extend(Connection.prototype, {
     if (callback) {
       // XXX would it be better form to do the binding in stream.on,
       // or caller, instead of here?
-      // XXX improve error message (and how we report it)
+        // XXX improve error message (and how we report it)
       callback = Meteor.bindEnvironment(
         callback,
         "delivering result of invoking '" + name + "'"
       );
     }
-
-    // Keep our args safe from mutation (eg if we don't send the message for a
-    // while because of a wait method).
-    args = EJSON.clone(args);
 
     // Lazily allocate method ID once we know that it'll be needed.
     var methodId = (function () {
@@ -712,6 +699,7 @@ _.extend(Connection.prototype, {
     // value.
 
     var stub = self._methodHandlers[name];
+   
     if (stub) {
       var setUserId = function(userId) {
         self.setUserId(userId);
@@ -755,6 +743,7 @@ _.extend(Connection.prototype, {
     // rather than going on to do an RPC. If there was no stub,
     // we'll end up returning undefined.
     if (alreadyInSimulation) {
+	console.log("already in simulation");
       if (callback) {
         callback(exception, stubReturnValue);
         return undefined;
@@ -779,6 +768,8 @@ _.extend(Connection.prototype, {
     // At this point we're definitely doing an RPC, and we're going to
     // return the value of the RPC to the caller.
 
+
+ 
     // If the caller didn't give a callback, decide what to do.
     if (!callback) {
       if (Meteor.isClient) {
@@ -793,6 +784,7 @@ _.extend(Connection.prototype, {
         callback = future.resolver();
       }
     }
+
     // Send the RPC. Note that on the client, it is important that the
     // stub have finished before we send the RPC, so that we know we have
     // a complete list of which local documents the stub wrote.
@@ -808,38 +800,73 @@ _.extend(Connection.prototype, {
       message.randomSeed = randomSeed;
     }
 
-    var methodInvoker = new MethodInvoker({
-      methodId: methodId(),
-      callback: callback,
-      connection: self,
-      onResultReceived: options.onResultReceived,
-      wait: !!options.wait,
-      message: message
-    });
+    if (meta && Meteor.isClient) {
 
-    if (options.wait) {
-      // It's a wait method! Wait methods go in their own block.
-      self._outstandingMethodBlocks.push(
-        {wait: true, methods: [methodInvoker]});
-    } else {
-      // Not a wait method. Start a new block if the previous block was a wait
-      // block, and add it to the last block of methods.
-      if (_.isEmpty(self._outstandingMethodBlocks) ||
-          _.last(self._outstandingMethodBlocks).wait)
-        self._outstandingMethodBlocks.push({wait: false, methods: []});
-      _.last(self._outstandingMethodBlocks).methods.push(methodInvoker);
+      meta.transform(meta.coll, meta.doc, function() {
+
+        var methodInvoker = new MethodInvoker({
+          methodId: methodId(),
+          callback: callback,
+          connection: self,
+          onResultReceived: options.onResultReceived,
+          wait: !!options.wait,
+          message: message
+        });
+
+        if (options.wait) {
+          // It's a wait method! Wait methods go in their own block.
+          self._outstandingMethodBlocks.push(
+            {wait: true, methods: [methodInvoker]});
+        } else {
+          // Not a wait method. Start a new block if the previous block was a wait
+          // block, and add it to the last block of methods.
+          if (_.isEmpty(self._outstandingMethodBlocks) ||
+              _.last(self._outstandingMethodBlocks).wait)
+            self._outstandingMethodBlocks.push({wait: false, methods: []});
+          _.last(self._outstandingMethodBlocks).methods.push(methodInvoker);
+        }
+
+        // If we added it to the first block, send it out now.
+        if (self._outstandingMethodBlocks.length === 1)
+          methodInvoker.sendMessage();
+
+      });
+      return options.returnStubValue ? stubReturnValue : undefined;
+
+    } else {	// regular path -- nonMylar
+      var methodInvoker = new MethodInvoker({
+        methodId: methodId(),
+        callback: callback,
+        connection: self,
+        onResultReceived: options.onResultReceived,
+        wait: !!options.wait,
+        message: message
+      });
+
+      if (options.wait) {
+        // It's a wait method! Wait methods go in their own block.
+        self._outstandingMethodBlocks.push(
+          {wait: true, methods: [methodInvoker]});
+      } else {
+        // Not a wait method. Start a new block if the previous block was a wait
+        // block, and add it to the last block of methods.
+        if (_.isEmpty(self._outstandingMethodBlocks) ||
+            _.last(self._outstandingMethodBlocks).wait)
+          self._outstandingMethodBlocks.push({wait: false, methods: []});
+        _.last(self._outstandingMethodBlocks).methods.push(methodInvoker);
+      }
+
+      // If we added it to the first block, send it out now.
+      if (self._outstandingMethodBlocks.length === 1)
+        methodInvoker.sendMessage();
+
+      // If we're using the default callback on the server,
+      // block waiting for the result.
+      if (future) {//@ENC: runs on server only
+        return future.wait();
+      }
+      return options.returnStubValue ? stubReturnValue : undefined;
     }
-
-    // If we added it to the first block, send it out now.
-    if (self._outstandingMethodBlocks.length === 1)
-      methodInvoker.sendMessage();
-
-    // If we're using the default callback on the server,
-    // block waiting for the result.
-    if (future) {
-      return future.wait();
-    }
-    return options.returnStubValue ? stubReturnValue : undefined;
   },
 
   // Before calling a method stub, prepare all stores to track changes and allow
@@ -900,7 +927,8 @@ _.extend(Connection.prototype, {
       // but it doesn't seem worth it yet to have a special API for
       // subscriptions to preserve after unit tests.
       if (sub.name !== 'meteor_autoupdate_clientVersions') {
-        self._subscriptions[id].stop();
+      self._send({msg: 'unsub', id: id});
+      delete self._subscriptions[id];
       }
     });
   },
@@ -1294,20 +1322,30 @@ _.extend(Connection.prototype, {
     // Process "sub ready" messages. "sub ready" messages don't take effect
     // until all current server documents have been flushed to the local
     // database. We can use a write fence to implement this.
-    _.each(msg.subs, function (subId) {
-      self._runWhenAllServerDocsAreFlushed(function () {
-        var subRecord = self._subscriptions[subId];
-        // Did we already unsubscribe?
-        if (!subRecord)
-          return;
-        // Did we already receive a ready message? (Oops!)
-        if (subRecord.ready)
-          return;
-        subRecord.readyCallback && subRecord.readyCallback();
-        subRecord.ready = true;
-        subRecord.readyDeps.changed();
+      _.each(msg.subs, function (subId) {
+	  self._runWhenAllServerDocsAreFlushed(function () {
+              var subRecord = self._subscriptions[subId];
+              // Did we already unsubscribe?
+              if (!subRecord)
+		  return;
+              // Did we already receive a ready message? (Oops!)
+              if (subRecord.ready)
+		  return;
+	      
+	      ready_func = function() {
+		  subRecord.readyCallback && subRecord.readyCallback();
+		  subRecord.ready = true;
+		  subRecord.readyDeps && subRecord.readyDeps.changed();
+              };
+	      
+	      if (Meteor.Collection.intercept && Meteor.Collection.intercept.on_ready) {
+		  Meteor.Collection.intercept.on_ready(subRecord.name, ready_func);
+	      } else {
+		  ready_func();
+	      }
+	      
+	  });
       });
-    });
   },
 
   // Ensures that "f" will be called after all documents currently in
@@ -1361,7 +1399,7 @@ _.extend(Connection.prototype, {
     if (!_.has(self._subscriptions, msg.id))
       return;
     var errorCallback = self._subscriptions[msg.id].errorCallback;
-    self._subscriptions[msg.id].remove();
+    delete self._subscriptions[msg.id];
     if (errorCallback && msg.error) {
       errorCallback(new Meteor.Error(
         msg.error.error, msg.error.reason, msg.error.details));

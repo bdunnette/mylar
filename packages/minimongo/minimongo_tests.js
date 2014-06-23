@@ -176,11 +176,11 @@ Tinytest.add("minimongo - cursors", function (test) {
   // fetch
   res = q.fetch();
   test.length(res, 20);
-  for (var i = 0; i < 20; i++) {
+  for (var i = 0; i < 20; i++)
     test.equal(res[i].i, i);
-  }
-  // call it again, it still works
-  test.length(q.fetch(), 20);
+  // everything empty
+  test.length(q.fetch(), 0);
+  q.rewind();
 
   // forEach
   var count = 0;
@@ -192,8 +192,9 @@ Tinytest.add("minimongo - cursors", function (test) {
     test.isTrue(cursor === q);
   }, context);
   test.equal(count, 20);
-  // call it again, it still works
-  test.length(q.fetch(), 20);
+  // everything empty
+  test.length(q.fetch(), 0);
+  q.rewind();
 
   // map
   res = q.map(function (obj, i, cursor) {
@@ -205,8 +206,8 @@ Tinytest.add("minimongo - cursors", function (test) {
   test.length(res, 20);
   for (var i = 0; i < 20; i++)
     test.equal(res[i], i * 2);
-  // call it again, it still works
-  test.length(q.fetch(), 20);
+  // everything empty
+  test.length(q.fetch(), 0);
 
   // findOne (and no rewind first)
   test.equal(c.findOne({i: 0}).i, 0);
@@ -2919,26 +2920,7 @@ Tinytest.add("minimongo - count on cursor with limit", function(test){
   test.equal(count, 3);
 
   c.stop();
-});
 
-Tinytest.add("minimongo - reactive count with cached cursor", function (test) {
-  var coll = new LocalCollection;
-  var cursor = coll.find({});
-  var firstAutorunCount, secondAutorunCount;
-  Deps.autorun(function(){
-    firstAutorunCount = cursor.count();
-  });
-  Deps.autorun(function(){
-    secondAutorunCount = coll.find({}).count();
-  });
-  test.equal(firstAutorunCount, 0);
-  test.equal(secondAutorunCount, 0);
-  coll.insert({i: 1});
-  coll.insert({i: 2});
-  coll.insert({i: 3});
-  Deps.flush();
-  test.equal(firstAutorunCount, 3);
-  test.equal(secondAutorunCount, 3);
 });
 
 Tinytest.add("minimongo - $near operator tests", function (test) {

@@ -544,7 +544,7 @@ Meteor.methods({
 /// ACCOUNT DATA
 ///
 
-// connectionId -> {connection, loginToken}
+// connectionId -> {connection, loginToken, srpChallenge}
 var accountData = {};
 
 // HACK: This is used by 'meteor-accounts' to get the loginToken for a
